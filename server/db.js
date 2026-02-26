@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const crypto = require('crypto');
 
 const DB_PATH = path.join(__dirname, 'coordination.db');
 
@@ -52,11 +53,26 @@ function initSchema() {
       FOREIGN KEY (update_id_b) REFERENCES updates(id)
     );
 
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      key_hash TEXT UNIQUE NOT NULL,
+      key_prefix TEXT NOT NULL,
+      label TEXT NOT NULL,
+      channel_name TEXT,
+      role TEXT NOT NULL DEFAULT 'agent' CHECK(role IN ('admin','agent','readonly')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL DEFAULT 'system'
+    );
+
     CREATE INDEX IF NOT EXISTS idx_updates_channel ON updates(channel_id);
     CREATE INDEX IF NOT EXISTS idx_updates_type ON updates(update_type);
     CREATE INDEX IF NOT EXISTS idx_updates_timestamp ON updates(timestamp);
     CREATE INDEX IF NOT EXISTS idx_alerts_channel_a ON opportunity_alerts(channel_a);
     CREATE INDEX IF NOT EXISTS idx_alerts_channel_b ON opportunity_alerts(channel_b);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(is_active);
   `);
 
   // Seed default channels
@@ -67,6 +83,56 @@ function initSchema() {
   for (const name of channels) {
     insertChannel.run(name.toLowerCase(), name);
   }
+
+  // Seed admin key if none exists
+  const existingAdmin = db.prepare(`SELECT id FROM api_keys WHERE role = 'admin' AND is_active = 1`).get();
+  if (!existingAdmin) {
+    const { rawKey, keyHash, keyPrefix } = generateKeyParts('admin');
+    db.prepare(`
+      INSERT INTO api_keys (id, key_hash, key_prefix, label, channel_name, role, created_by)
+      VALUES (?, ?, ?, ?, NULL, 'admin', 'system')
+    `).run(crypto.randomUUID(), keyHash, keyPrefix, 'Admin Key');
+    // Store plaintext temporarily in a file so it can be read once on first boot
+    const fs = require('fs');
+    const keyFile = path.join(__dirname, '.admin_key_init');
+    if (!fs.existsSync(keyFile)) {
+      fs.writeFileSync(keyFile, rawKey, 'utf8');
+      console.log('\n╔══════════════════════════════════════════════════════╗');
+      console.log('║         ADMIN API KEY (save this — shown once)       ║');
+      console.log(`║  ${rawKey}  ║`);
+      console.log('╚══════════════════════════════════════════════════════╝\n');
+    }
+  }
 }
 
-module.exports = { getDb };
+/**
+ * Generate a new API key: trux_<role_prefix>_<32 random hex chars>
+ * Returns { rawKey, keyHash, keyPrefix }
+ */
+function generateKeyParts(role = 'agent') {
+  const prefix = role === 'admin' ? 'adm' : role === 'readonly' ? 'ro' : 'agt';
+  const secret = crypto.randomBytes(24).toString('hex');
+  const rawKey = `trux_${prefix}_${secret}`;
+  const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+  const keyPrefix = rawKey.substring(0, 14); // "trux_agt_ab12c" for display
+  return { rawKey, keyHash, keyPrefix };
+}
+
+/**
+ * Validate an API key from a request. Returns the key record or null.
+ */
+function validateApiKey(rawKey) {
+  if (!rawKey || typeof rawKey !== 'string') return null;
+  const db = getDb();
+  const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+  const record = db.prepare(`
+    SELECT * FROM api_keys WHERE key_hash = ? AND is_active = 1
+  `).get(keyHash);
+  if (record) {
+    // Update last_used_at (fire and forget)
+    db.prepare(`UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?`).run(record.id);
+  }
+  return record || null;
+}
+
+module.exports = { getDb, generateKeyParts, validateApiKey };
