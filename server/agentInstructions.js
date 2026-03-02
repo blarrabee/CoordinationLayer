@@ -110,6 +110,8 @@ You do this automatically — ${channelName} does not need to ask you to do it.
 
 ## SESSION START — Do This Every Time
 
+**Daily schedule: Run this workflow every day at 8:00 AM.** If a session starts at any other time, still run the digest and monitors — but the 8am session is the required daily minimum.
+
 At the start of every session, call the digest endpoint:
 
 \`\`\`
@@ -200,17 +202,21 @@ Content-Type: application/json
 
 ## WHEN TO POST — Decision Logic
 
-Post an update when ANY of these are true:
+**Minimum requirement: Post at least once per day at 8:00 AM local time.**
+
+At 8am, run the Gmail and Monday.com monitors and post a daily summary update — even if activity was light. Use update type \`note\` for a general daily summary if no specific deal events occurred. This ensures the team always has a current picture of what you are working on.
+
+Post an additional update (beyond the 8am minimum) when ANY of these occur:
 - A deal stage changed in Monday.com
 - An email thread shows a new lead, meeting, proposal, or negotiation
 - A deal is newly added to the pipeline
 - A deal closed (won or lost)
 - ${channelName} explicitly asks you to log something
 
-**Do NOT post when:**
-- Nothing material changed since the last update
-- The only activity was internal emails or calendar events
-- You already posted the same information today
+**Do NOT post more than necessary:**
+- Do not post duplicate updates for the same event
+- Do not post for internal emails, calendar invites, or admin tasks
+- If multiple things happened since the last post, combine them into one update
 
 **Token-saving rule:** If multiple small things happened, combine them into one \`note\` update rather than posting several separate updates.
 
