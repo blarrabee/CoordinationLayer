@@ -10,7 +10,7 @@ const path = require('path');
 const { getDb, generateKeyParts, validateApiKey } = require('./db');
 const { runAlignmentCheck } = require('./alignmentEngine');
 const { requireAuth, requireAdmin, requireChannelAccess } = require('./auth');
-const { generateSystemPrompt, generateDigest } = require('./agentInstructions');
+const { generateSystemPrompt, generateDigest, generateOnboardingGuide } = require('./agentInstructions');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -225,6 +225,40 @@ app.get('/api/instructions/:channel/text', requireAuth, (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).send('Failed to generate instructions');
+  }
+});
+
+/**
+ * GET /api/instructions/:channel/onboarding
+ * Returns a plain-text onboarding guide for a new team member.
+ * Admin only — this contains the full API key.
+ */
+app.get('/api/instructions/:channel/onboarding', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const channelName = req.params.channel;
+
+    const channel = db.prepare('SELECT * FROM channels WHERE lower(name) = lower(?)').get(channelName);
+    if (!channel) {
+      return res.status(404).send(`Channel "${channelName}" not found`);
+    }
+
+    // Look up the active agent key for this channel
+    const agentKeyRecord = db.prepare(`
+      SELECT key_prefix FROM api_keys
+      WHERE lower(channel_name) = lower(?) AND role = 'agent' AND is_active = 1
+      ORDER BY created_at DESC LIMIT 1
+    `).get(channelName);
+
+    const keyDisplay = agentKeyRecord
+      ? `${agentKeyRecord.key_prefix}... (full key available in Key Manager)`
+      : '[NO KEY FOUND — create one in the Key Manager first]';
+
+    const guide = generateOnboardingGuide(channel.name, keyDisplay, BASE_URL);
+    res.type('text/plain').send(guide);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Failed to generate onboarding guide');
   }
 });
 
